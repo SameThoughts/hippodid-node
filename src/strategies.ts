@@ -25,11 +25,13 @@ function formatProfile(profile: CharacterProfile): string {
   const parts: string[] = [];
   if (profile.personality) parts.push(`Personality: ${profile.personality}`);
   if (profile.background) parts.push(`Background: ${profile.background}`);
-  if (profile.rules.length > 0) {
-    parts.push(`Rules:\n${profile.rules.map((r) => `- ${r}`).join("\n")}`);
+  const rules = profile.rules ?? [];
+  if (rules.length > 0) {
+    parts.push(`Rules:\n${rules.map((r) => `- ${r}`).join("\n")}`);
   }
-  if (Object.keys(profile.customFields).length > 0) {
-    const fields = Object.entries(profile.customFields)
+  const customFields = profile.customFields ?? {};
+  if (Object.keys(customFields).length > 0) {
+    const fields = Object.entries(customFields)
       .map(([k, v]) => `- ${k}: ${v}`)
       .join("\n");
     parts.push(`Custom Fields:\n${fields}`);
