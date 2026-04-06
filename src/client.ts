@@ -437,61 +437,9 @@ export class HippoDid {
       headers["X-Tenant-Id"] = this.tenantId;
     }
 
-    let lastError: Error | undefined;
-
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      if (attempt > 0) {
-        const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
-        const jitter = Math.random() * backoff * 0.3;
-        await sleep(backoff + jitter);
-      }
-
-      let response: Response;
-      try {
-        response = await fetch(url, { method: "POST", headers, body: form });
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        continue;
-      }
-
-      if (response.ok) {
-        const text = await response.text();
-        return JSON.parse(text) as T;
-      }
-
-      let errorMessage: string;
-      try {
-        const errBody = await response.json();
-        errorMessage = errBody.message ?? errBody.error ?? JSON.stringify(errBody);
-      } catch {
-        errorMessage = `HTTP ${response.status}`;
-      }
-
-      if (response.status === 429 || response.status >= 500) {
-        if (response.status === 429 && attempt === this.maxRetries) {
-          const retryAfter = response.headers.get("Retry-After");
-          throw new RateLimitError(
-            errorMessage,
-            retryAfter ? parseInt(retryAfter, 10) * 1000 : 0,
-          );
-        }
-        lastError = new HippoDidError(errorMessage, response.status);
-        continue;
-      }
-
-      if (response.status === 401 || response.status === 403) {
-        throw new AuthenticationError(errorMessage);
-      }
-      if (response.status === 404) {
-        throw new NotFoundError(errorMessage);
-      }
-      if (response.status === 400 || response.status === 422) {
-        throw new ValidationError(errorMessage, response.status);
-      }
-      throw new HippoDidError(errorMessage, response.status);
-    }
-
-    throw lastError ?? new HippoDidError("Request failed after retries");
+    return this.executeWithRetry(
+      () => fetch(url, { method: "POST", headers, body: form }),
+    );
   }
 
   private async request<T>(
@@ -503,15 +451,30 @@ export class HippoDid {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
-      "Content-Type": "application/json",
       Accept: "application/json",
       ...extraHeaders,
     };
-
+    if (body != null) {
+      headers["Content-Type"] = "application/json";
+    }
     if (this.tenantId) {
       headers["X-Tenant-Id"] = this.tenantId;
     }
 
+    return this.executeWithRetry(
+      () =>
+        fetch(url, {
+          method,
+          headers,
+          body: body != null ? JSON.stringify(body) : undefined,
+        }),
+    );
+  }
+
+  /** Shared retry/backoff/error-dispatch loop used by request() and requestMultipart(). */
+  private async executeWithRetry<T>(
+    doFetch: () => Promise<Response>,
+  ): Promise<T> {
     let lastError: Error | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
@@ -523,11 +486,7 @@ export class HippoDid {
 
       let response: Response;
       try {
-        response = await fetch(url, {
-          method,
-          headers,
-          body: body != null ? JSON.stringify(body) : undefined,
-        });
+        response = await doFetch();
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         continue;
@@ -540,7 +499,6 @@ export class HippoDid {
         return JSON.parse(text) as T;
       }
 
-      // Parse error body
       let errorMessage: string;
       try {
         const errBody = await response.json();
@@ -550,7 +508,6 @@ export class HippoDid {
         errorMessage = `HTTP ${response.status}`;
       }
 
-      // Retryable: 429 or 5xx
       if (response.status === 429 || response.status >= 500) {
         if (response.status === 429 && attempt === this.maxRetries) {
           const retryAfter = response.headers.get("Retry-After");
@@ -563,7 +520,6 @@ export class HippoDid {
         continue;
       }
 
-      // Non-retryable errors
       if (response.status === 401 || response.status === 403) {
         throw new AuthenticationError(errorMessage);
       }
@@ -586,11 +542,11 @@ function normaliseBatchJob(raw: BatchJobApiResponse): BatchJob {
     jobId: raw.jobId,
     status: raw.status,
     dryRun: raw.dryRun,
-    totalRows: raw.progress.totalRows,
-    succeeded: raw.progress.succeeded,
-    failed: raw.progress.failed,
-    skipped: raw.progress.skipped,
-    errors: raw.errors.map((e) => ({
+    totalRows: raw.progress?.totalRows ?? 0,
+    succeeded: raw.progress?.succeeded ?? 0,
+    failed: raw.progress?.failed ?? 0,
+    skipped: raw.progress?.skipped ?? 0,
+    errors: (raw.errors ?? []).map((e) => ({
       rowIndex: e.rowIndex,
       externalId: e.externalId,
       message: e.message,
@@ -604,7 +560,7 @@ function normaliseBatchJob(raw: BatchJobApiResponse): BatchJob {
 /** Convert an array of row objects to a CSV string. */
 function rowsToCsv(rows: Record<string, string>[]): string {
   if (rows.length === 0) return "";
-  const columns = Object.keys(rows[0]);
+  const columns = [...new Set(rows.flatMap(Object.keys))];
   const escapeCsv = (v: string) => {
     if (v.includes(",") || v.includes('"') || v.includes("\n")) {
       return `"${v.replace(/"/g, '""')}"`;
