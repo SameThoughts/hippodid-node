@@ -168,6 +168,10 @@ hd.batchCreateCharacters({ templateId, rows, externalIdColumn, onConflict?, dryR
 hd.getBatchJobStatus(jobId)
 ```
 
+> **Note:** `batchCreateCharacters()` accepts `rows` as an array of JSON objects for convenience,
+> but the SDK converts them to CSV and uploads via `multipart/form-data` internally — this matches
+> the backend's batch endpoint contract. Do not POST JSON rows directly to the REST API.
+
 ### Context Assembly
 
 ```typescript
